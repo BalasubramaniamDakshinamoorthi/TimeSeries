@@ -1,0 +1,214 @@
+---
+title: "Houston Power Usage EDA and Forecasting Part of Texas Feb 2021 Snowstorm and Power Outage Investigation"
+author: "Balasubramaniam Dashinamoorthi"
+date: "4/17/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+tinytex::reinstall_tinytex()
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+install.packages("tinytex")
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(lattice)
+library(codetools)
+library(naniar)
+library(gridExtra)
+library(corrplot)
+library(ggplot2)
+library(GGally)
+library(plotly)
+library(ggmosaic)
+library(leaps)
+library(DescTools)
+library(plyr)
+library(readr)
+library(repr)
+library(glmnet)
+library(car)
+library(latexpdf)
+library(car)
+library(caret)
+library(tswge)
+library(smooth)
+library(timeSeries)
+library(dplyr)
+library(ggplot2)
+library(forecast)
+installed.packages("orcutt")
+library(orcutt)
+library(tseries)
+library(tidyverse)
+library(GGally)
+library(astsa)
+library(vars)
+library(nnfor)
+```
+#Introduction
+#Recent Texas Feb 15th- 2021 Power Outage, came to attention worldwide resulting in everyone looking for answer to what went wrong. 
+#Houston was the most affected city and reported 1500+ Carbon Monoxide deaths due to Texans running cars in enclosed spaces,residents got power back after #5 days. 
+#My mission is to provide insights to power companies and lawmakers about the story behind the data since the storm was forecasted well in advance.
+#By accurately anticipating,fore casting power requirements, lawmakers and power companies can evaluate whether their production capabilities are sufficient and adequate.Also this model can be used for other cities those are prone to natural disasters.
+#Data preparation
+#Houston Power consumption hourly data in kWH from 01-06-2016 to 07-07-2020.
+#Houston Weather data consists of daily Max Temp, Dew,Humitidy,Pressure,Wind,Precipitation
+#Houston Power Consumption data converted to Power usage in KWH per daily 
+#Combined Power Consumption KWH and Weather maximum temperature combined into one data frame 
+#Subset of sliced data frame created for from 01-06-2016 to 12-31-2019 and 01-01-2000 to 07-07-2020 for MLP/NN 
+tinytex::reinstall_tinytex()# FOR KNIT PDF- BUT DID NOT WORK IN MY R STUDIO
+#tlmgr install tlpsv
+df=read.csv('C:/Timeseries/HoustonPowerWeather.csv')
+head(df)
+dim(df)#1498 22
+plotts.sample.wge(df$PowerKWH)
+#Using available data applying MLR
+df2 = df[1:1497,]
+fit = lm(PowerKWH~Dew_max+Temp_max+Hum_max+Wind_max+Press_max+Precipit, data=df)
+AIC(fit) #
+aic.wge(fit$residuals,p=1:10,q=0:3)  # AIC picks full data p=5,q=1
+
+#Checking Multi Collinearity 
+car::vif(fit)
+#VIF Values None of them Higher than 10, only Dew_Max 7.61 over 5 but less than 10 , so no need any multi collinearity adjustment
+#Dew_max  Temp_max   Hum_max  Wind_max Press_max  Precipit 
+#7.619168  5.623889  1.833921  1.175850  2.033481  1.065330 
+
+#Checking Distribution using Dianostic Plot looks fair 
+par(mfrow=c(2,2))
+plot(fit)
+#Checking Statistical Significance found Rejected Null Hypothesis
+csfit=cochrane.orcutt(fit)
+summary(csfit)
+#ARIMA Model using MLR 
+fitArima=arima(df$PowerKWH,order=c(5,0,1),xreg=cbind(df$Temp_max,df$Dew_max,df$Hum_max,df$Wind_max,df$Press_max,df$Precipit))
+fitArima
+AIC(fitArima) #9410.494
+preds=predict(fitArima, newxreg=cbind(df$Temp_max,df$Dew_max,df$Hum_max,df$Wind_max,df$Press_max,df$Precipit))
+preds$pred
+#36.163 36.596
+preds$pred
+ASE2 = mean((df$PowerKWH[1270:1498]-preds$pred)^2)
+ASE2 #433.94
+#Finding the Seasonality and Removing Getting Difference Forecasting
+diff=artrans.wge(df$PowerKWH, c(rep(0,364),1))
+plotts.sample.wge(diff)
+aic5.wge(diff)#both favors p=2,q=1
+aic5.wge(diff,type="bic")#both favors p=2,q=1
+est=est.arma.wge(diff,p=2,q=1)
+plotts.sample.wge(est$res)
+forecastD=fore.aruma.wge(df$PowerKWH,s=365,phi=est$phi,theta=est$theta,n.ahead=229,limits=FALSE,lastn=FALSE,plot=TRUE)
+forecastD$f#14.517
+forecastD$ll#-7.459
+forecastD$ul#36.531
+plot(seq(1,1726,1),df$PowerKWH[1:1726], type = "l",xlim = c(0,1726), ylab = "Power usage", main = "229 Days Power Usage Forecast")
+lines(seq(1497,1726,1), preds$pred, type = "l", col = "red")
+ASE = mean((df$PowerKWH[1270:1498] - forecastD$f )^2)
+ASE#388.632
+
+#MLP Forecasting-#PowerKWH using MLP- Multi Layer Perceptron
+PU1498=ts(df$PowerKWH[1:1498],frequency =365)
+PUfit = mlp(PU1498)
+plot(PUfit)
+PUfit
+forePU=forecast(PUfit,h = 229)
+forePU$mean
+ASE = mean((df$PowerKWH[1499:1727]-forePU$mean)^2)
+ASE
+
+#VARS Prediction
+PUsmall=df[1:1498,] 
+VARselect(cbind(PUsmall$PowerKWH[2:1498],PUsmall$Temp_max[2:1498],PUsmall$Hum_max[2:1498],PUsmall$Wind_max[2:1498],PUsmall$Press_max[2:1498],PUsmall$Precipit[2:1498]),lag.max = 10, season =365, type = "both")
+#VARselect picks p=4
+PUVAR2 = VAR(cbind(PUsmall$PowerKWH[2:1498],PUsmall$Temp_max[2:1498],PUsmall$Hum_max[2:1498],PUsmall$Wind_max[2:1498],PUsmall$Press_max[2:1498],PUsmall$Precipit[2:1498]),season =365, type = "both",p =4)
+preds1=predict(PUVAR2,n.ahead=229)
+#Forecasted Power KWH
+preds1$fcst
+#85.12704 14.45073
+ASE = mean((df$PowerKWH[1270:1498] - preds1$fcst$y1[,1])^2)
+ASE #357.156
+ljung.wge(diff)$pval #Reject Ho
+ljung.wge(diff, K = 5)$pval #Reject  Ho, K = 5)$pval #Reject Ho
+
+########################################################
+# BELOW CODE IS EXTRA TRIED OTHER OPTIONS NOT NECESSARY#
+########################################################
+
+aic5.wge(df$PowerKWH,p=1:10,q=1:3,type="aic")#getting p=10,q=1
+#dev.off()
+#Sliced Data is from 01-06-2016 to 12-31-2019-4 years
+df20162019<-df$Date[c(1,1309)]
+head(df20162019)
+df3=data.frame(df20162019, df$Temp_max,df$Dew_max,df$PowerKWH,df$Hum_max,df$Wind_max,df$Press_max,df$Precipit)
+tail(df3)
+head(df3)
+r=dim(df3)
+print(r)
+plotts.sample.wge(df3$df.PowerKWH)
+# Correlation Plot from all the Predictors to check how the correlation, found positive correlation Dew_max has 85 percent Dew_max has #61 percent and Temp_max has 71 percent influence of Power #Usage. Dew_max has 85 percent direct influence on Temp_max. Humidity 49 #percent influence on Dew_max and 10 percent on Power. Wind has 13 percent influence on Dew_max and negative 1 percent #influence on #Power/Temperature. Precipitation negative 1 percent influence with Power and Temperature.
+ggpairs(df3)
+aic5.wge(df3$df.PowerKWH,p=1:10,q=1:3,type="aic")#getting p=10,q=1
+ljung.wge(df3)$pval #Reject Ho
+ljung.wge(df3, K = 5)$pval #Reject  Ho, K = 5)$pval #Reject Ho
+fit = lm(df3$df.PowerKWH~df3$df.Dew_max+df3$df.Temp_max+df3$df.Hum_max+df3$df.Wind_max+df3$df.Press_max+df3$df.Precipit, data=df3)
+est2 = est.arma.wge(fit$residuals, p = 10, q = 1)
+AIC(fit) #sliced data-from 01-06-2016 to 12-31-2019-4 years
+aic.wge(fit$residuals,p=1:10,q=1:3)  # AIC picks full data p=5,q=1
+#Forecasting using sliced data -Forecast until Feb 21 -2020 [so n.ahead=1 year+Feb21=366+31+21=418 days] using aic5 p=10,q=1
+# Using AIC EST2 To Forecast ASE which is p=10 and q=1-from 01-06-2016 to 12-31-2019-4 years
+forecasts2=fore.aruma.wge(df3$df.PowerKWH,phi=est2$phi,theta=est2$theta,n.ahead=418,limits=FALSE,lastn=FALSE,plot=TRUE)
+ASE = mean((df3$df.PowerKWH - forecasts2$f )^2)
+ASE
+# Using AIC EST4 To Forecast ASE using aic p=5 and q=1
+est4 = est.arma.wge(fit$residuals, p =5, q = 1)
+forecasts4=fore.aruma.wge(df3$df.PowerKWH,phi=est4$phi,theta=est4$theta,n.ahead=418,limits=FALSE,lastn=FALSE,plot=TRUE)
+ASE = mean((df3$df.PowerKWH - forecasts4$f )^2)
+ASE
+# Model Power KWH based on Full Data Set using MLR with Cor Errors-full data from from 01-06-2016 to 7-7-2020-4 years using aic5 p=10,q=1
+aic5.wge(df$PowerKWH,p=1:10,q=1:3,type="aic")#getting p=10,q=1
+ljung.wge(df)$pval #Reject Ho
+ljung.wge(df, K = 5)$pval #Reject  Ho, K = 5)$pval #Reject Ho
+fit = lm(df$PowerKWH~df$Dew_max+df$Temp_max+df$Hum_max+df$Wind_max+df$Press_max+df$Precipit, data=df)
+est3 = est.arma.wge(fit$residuals, p = 10, q = 1)
+AIC(fit) #full data
+#let us check what aic is giving for full data using aic p=5 and q=1
+aic.wge(fit$residuals,1:10,q=1:3)  # AIC picks p=5 ,q=1 
+#Forecasting Last data was 7-7-2020, from 7-7-20 until Feb 21 2020 229 days
+forecasts5=fore.aruma.wge(df$PowerKWH,phi=est3$phi,theta=est3$theta,n.ahead=229,limits=FALSE,lastn=FALSE,plot=TRUE)
+ASE = mean((df$PowerKWH - forecasts5$f )^2)
+ASE
+ljung.wge(fit$residuals) # pval = 0
+ljung.wge(fit$residuals, K = 5) # pval = 0.0
+#Check any trend since got peak@0.14- 7.14- weekly 
+difference = artrans.wge(df3$df.PowerKWH, c(rep(0,6),1))
+plotts.sample.wge(difference)
+aic5.wge(difference)#both favors p=5,q=1
+aic5.wge(difference,type = "bic")#both favors p=5,q=1
+ljung.wge(difference)$pval #Reject Ho
+ljung.wge(difference, K = 5)$pval #Reject  Ho, K = 5)$pval #Reject Ho
+est3 = est.arma.wge(fit$residuals, p = 5, q = 1)
+forecasts=fore.aruma.wge(df3$df.PowerKWH,phi=est3$phi,theta=est3$theta,n.ahead=425,limits=FALSE,lastn=FALSE,plot=TRUE)
+ASE = mean((df3$df.PowerKWH - forecasts$f )^2)
+ASE
+
+#Trying to find out just Weather is stationary or not, without combining with Power with full weather data from from 01-06-2016 to #7-7-2020-4 years
+df_weather = read.csv('C:/Timeseries/HoustonWeather.csv')
+head(df_weather)
+plotts.sample.wge(df_weather$Temp_max)
+aic5.wge(df_weather$Temp_max,p=1:10,q=1:3,type="aic")#getting p=7,q=1
+fit=lm(df_weather$Temp_max~df_weather$Dew_max+df_weather$Hum_max+df_weather$Wind_max+df_weather$Press_max+df_weather$Precipit, data=df_weather)
+est4=est.arma.wge(fit$residuals, p =7, q = 1)
+AIC(fit)
+```
+# reference
+
+1. https://www.weather.gov/hgx/climate_iah.
+2. Applied time series analysis with R by Elliott, Alan C. Gray, Harry L. Woodward, Wayne A (z-lib.org)
+3. https://www.eia.gov
+
+
